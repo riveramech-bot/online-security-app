@@ -44,10 +44,10 @@
       state.breachEnabled = !!d.breachCheckEnabled;
       var badge = document.getElementById('statusBadge');
       if (state.breachEnabled) {
-        badge.textContent = 'Breach checking: live';
+        badge.textContent = d.hibpEnabled ? 'Breach checking: live (free + HIBP)' : 'Breach checking: live (free)';
         badge.className = 'status-badge ok';
       } else {
-        badge.textContent = 'Breach checking: add HIBP_API_KEY to enable';
+        badge.textContent = 'Breach checking unavailable';
         badge.className = 'status-badge warn';
       }
     }).catch(function () {

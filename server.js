@@ -25,65 +25,103 @@ function cached(key, ttlMs, fetcher) {
 app.get('/api/status', (req, res) => {
   res.json({
     ok: true,
-    breachCheckEnabled: Boolean(HIBP_API_KEY),
-    passwordCheckEnabled: true // this one is always free/keyless
+    breachCheckEnabled: true, // XposedOrNot is free/keyless, so this is always on
+    hibpEnabled: Boolean(HIBP_API_KEY), // optional extra coverage layer
+    passwordCheckEnabled: true // this one is always free/keyless too
   });
 });
 
-// ---------- breach check (Have I Been Pwned "breachedaccount" API) ----------
-// Requires a paid HIBP API key (HIBP_API_KEY env var). Without one, this
-// route reports that clearly instead of pretending to work.
+// ---------- breach check ----------
+// Primary source: XposedOrNot's breach-analytics API — free, keyless, no
+// signup required. If an HIBP_API_KEY is ever added, its results get merged
+// in too (deduped by breach name) for broader coverage, but nothing here
+// depends on that key existing.
+async function fetchXposedOrNot(email) {
+  const url = `https://api.xposedornot.com/v1/breach-analytics?email=${encodeURIComponent(email)}`;
+  const r = await fetch(url, {
+    headers: { 'user-agent': 'family-exposure-dashboard' },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (r.status === 429) throw new Error('rate-limited');
+  if (!r.ok) throw new Error(`XposedOrNot responded ${r.status}`);
+  const json = await r.json();
+  const details = (json.ExposedBreaches && json.ExposedBreaches.breaches_details) || [];
+  return details.map((b) => ({
+    name: b.breach,
+    title: b.breach,
+    domain: b.domain || null,
+    breachDate: b.xposed_date ? String(b.xposed_date) : null,
+    addedDate: null,
+    pwnCount: typeof b.xposed_records === 'number' ? b.xposed_records : null,
+    description: b.details || '',
+    dataClasses: b.xposed_data ? b.xposed_data.split(';').map((s) => s.trim()).filter(Boolean) : [],
+    isVerified: Boolean(b.verified),
+    isSensitive: false
+  }));
+}
+
+async function fetchHibp(email) {
+  const url = `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=false`;
+  const r = await fetch(url, {
+    headers: {
+      'hibp-api-key': HIBP_API_KEY,
+      'user-agent': 'family-exposure-dashboard'
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (r.status === 404) return []; // HIBP's documented "no breaches found" response
+  if (r.status === 429) throw new Error('rate-limited');
+  if (!r.ok) throw new Error(`HIBP responded ${r.status}`);
+  const raw = await r.json();
+  return raw.map((b) => ({
+    name: b.Name,
+    title: b.Title,
+    domain: b.Domain,
+    breachDate: b.BreachDate,
+    addedDate: b.AddedDate,
+    pwnCount: b.PwnCount,
+    description: (b.Description || '').replace(/<[^>]+>/g, ''),
+    dataClasses: b.DataClasses || [],
+    isVerified: b.IsVerified,
+    isSensitive: b.IsSensitive
+  }));
+}
+
 app.get('/api/breach-check', async (req, res) => {
   const email = String(req.query.email || '').trim().toLowerCase();
   if (!email || !email.includes('@')) {
     return res.status(400).json({ ok: false, error: 'Valid email required' });
   }
-  if (!HIBP_API_KEY) {
-    return res.json({
-      ok: false,
-      noKey: true,
-      error: 'No HIBP_API_KEY configured yet. Add one in Render env vars to enable breach checking.'
-    });
-  }
 
-  const key = `breach:${email}`;
+  const key = `breach:${email}:${HIBP_API_KEY ? 'with-hibp' : 'free-only'}`;
   try {
-    const result = await cached(key, 6 * 60 * 60 * 1000, async () => {
-      const url = `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=false`;
-      const r = await fetch(url, {
-        headers: {
-          'hibp-api-key': HIBP_API_KEY,
-          'user-agent': 'family-exposure-dashboard'
-        },
-        signal: AbortSignal.timeout(15000)
-      });
+    const breaches = await cached(key, 6 * 60 * 60 * 1000, async () => {
+      const fetchers = [fetchXposedOrNot(email)];
+      if (HIBP_API_KEY) fetchers.push(fetchHibp(email));
 
-      if (r.status === 404) {
-        // HIBP's documented "no breaches found" response
-        return { breaches: [] };
+      const sources = await Promise.allSettled(fetchers);
+      const anySucceeded = sources.some((s) => s.status === 'fulfilled');
+
+      if (!anySucceeded) {
+        // Every configured source failed — this is a real check failure,
+        // not "no breaches found", so don't report it as clean.
+        throw sources[0].reason;
       }
-      if (r.status === 429) {
-        throw new Error('rate-limited');
+
+      const merged = [];
+      const seen = new Set();
+      for (const s of sources) {
+        if (s.status !== 'fulfilled') continue;
+        for (const b of s.value) {
+          const k = (b.name || '').toLowerCase();
+          if (!seen.has(k)) {
+            merged.push(b);
+            seen.add(k);
+          }
+        }
       }
-      if (!r.ok) {
-        throw new Error(`HIBP responded ${r.status}`);
-      }
-      const breaches = await r.json();
-      return { breaches };
+      return merged;
     });
-
-    const breaches = (result.breaches || []).map((b) => ({
-      name: b.Name,
-      title: b.Title,
-      domain: b.Domain,
-      breachDate: b.BreachDate,
-      addedDate: b.AddedDate,
-      pwnCount: b.PwnCount,
-      description: (b.Description || '').replace(/<[^>]+>/g, ''),
-      dataClasses: b.DataClasses || [],
-      isVerified: b.IsVerified,
-      isSensitive: b.IsSensitive
-    }));
 
     res.json({ ok: true, email, breachCount: breaches.length, breaches });
   } catch (err) {
@@ -91,7 +129,7 @@ app.get('/api/breach-check', async (req, res) => {
     res.status(rateLimited ? 429 : 502).json({
       ok: false,
       error: rateLimited
-        ? 'Rate-limited by HIBP, try again in a minute.'
+        ? 'Rate-limited, try again in a few minutes.'
         : `Breach lookup failed: ${err.message}`
     });
   }
@@ -195,5 +233,5 @@ app.post('/api/password-strength', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`online-security-app listening on :${PORT}`);
-  console.log(`breach checking: ${HIBP_API_KEY ? 'ENABLED' : 'disabled (no HIBP_API_KEY)'}`);
+  console.log('breach checking: ENABLED (XposedOrNot, free/keyless)' + (HIBP_API_KEY ? ' + HIBP' : ''));
 });
