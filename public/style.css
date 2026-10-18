@@ -135,6 +135,31 @@ h3 { margin: 0; font-size: 15px; letter-spacing: 0.02em; text-transform: upperca
 .checklist-item input { margin-top: 2px; }
 .checklist-item.done span { text-decoration: line-through; color: #727fa0; }
 
+.broker-list { display: flex; flex-direction: column; gap: 8px; }
+.broker-row {
+  display: flex; align-items: center; gap: 12px;
+  background: #1d2538; border-radius: 10px; padding: 10px 14px;
+}
+.broker-row input[type=checkbox] { flex-shrink: 0; width: 16px; height: 16px; }
+.broker-row .broker-name { flex: 1; min-width: 0; }
+.broker-row .broker-name .bn-title { font-weight: 700; font-size: 13px; }
+.broker-row .broker-name .bn-note { font-size: 11px; color: #a9b4cc; margin-top: 2px; }
+.broker-row.done { opacity: 0.55; }
+.broker-row.done .bn-title { text-decoration: line-through; }
+.broker-row a.btn { text-decoration: none; display: inline-block; white-space: nowrap; }
+
+.freeze-table { overflow-x: auto; }
+.freeze-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.freeze-table th, .freeze-table td { text-align: center; padding: 10px 8px; border-bottom: 1px solid #262f45; }
+.freeze-table th { color: #a9b4cc; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+.freeze-table td:first-child, .freeze-table th:first-child { text-align: left; font-weight: 700; color: #e9edf5; }
+.freeze-table a { color: #8aa5ff; font-size: 10px; display: block; margin-top: 2px; text-decoration: none; }
+.freeze-table input[type=checkbox] { width: 16px; height: 16px; }
+
+.paste-item { background: #1d2538; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.paste-item .p-title { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+.paste-item .p-sub { font-size: 11px; color: #727fa0; }
+
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: #1d2538; border: 1px solid #333f5c; color: #e9edf5;

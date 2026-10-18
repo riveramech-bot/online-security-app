@@ -46,7 +46,7 @@ async function fetchXposedOrNot(email) {
   if (!r.ok) throw new Error(`XposedOrNot responded ${r.status}`);
   const json = await r.json();
   const details = (json.ExposedBreaches && json.ExposedBreaches.breaches_details) || [];
-  return details.map((b) => ({
+  const breaches = details.map((b) => ({
     name: b.breach,
     title: b.breach,
     domain: b.domain || null,
@@ -58,6 +58,17 @@ async function fetchXposedOrNot(email) {
     isVerified: Boolean(b.verified),
     isSensitive: false
   }));
+
+  // Pastes: data dumped in hacker "paste" sites (Pastebin and similar),
+  // separate from formal breach disclosures. Same free source, no extra call.
+  const pastesSummary = json.PastesSummary || {};
+  const pasteCount = parseInt(pastesSummary.cnt, 10) || 0;
+  const rawPastes = json.ExposedPastes;
+  const pastes = Array.isArray(rawPastes)
+    ? rawPastes
+    : (rawPastes && typeof rawPastes === 'object' ? Object.values(rawPastes) : []);
+
+  return { breaches, pasteCount, pastes: pastes.filter((p) => p && typeof p === 'object') };
 }
 
 async function fetchHibp(email) {
@@ -95,9 +106,9 @@ app.get('/api/breach-check', async (req, res) => {
 
   const key = `breach:${email}:${HIBP_API_KEY ? 'with-hibp' : 'free-only'}`;
   try {
-    const breaches = await cached(key, 6 * 60 * 60 * 1000, async () => {
+    const result = await cached(key, 6 * 60 * 60 * 1000, async () => {
       const fetchers = [fetchXposedOrNot(email)];
-      if (HIBP_API_KEY) fetchers.push(fetchHibp(email));
+      if (HIBP_API_KEY) fetchers.push(fetchHibp(email).then((breaches) => ({ breaches, pasteCount: 0, pastes: [] })));
 
       const sources = await Promise.allSettled(fetchers);
       const anySucceeded = sources.some((s) => s.status === 'fulfilled');
@@ -110,20 +121,31 @@ app.get('/api/breach-check', async (req, res) => {
 
       const merged = [];
       const seen = new Set();
+      let pasteCount = 0;
+      let pastes = [];
       for (const s of sources) {
         if (s.status !== 'fulfilled') continue;
-        for (const b of s.value) {
+        for (const b of s.value.breaches) {
           const k = (b.name || '').toLowerCase();
           if (!seen.has(k)) {
             merged.push(b);
             seen.add(k);
           }
         }
+        if (s.value.pasteCount) pasteCount = s.value.pasteCount;
+        if (s.value.pastes && s.value.pastes.length) pastes = s.value.pastes;
       }
-      return merged;
+      return { breaches: merged, pasteCount, pastes };
     });
 
-    res.json({ ok: true, email, breachCount: breaches.length, breaches });
+    res.json({
+      ok: true,
+      email,
+      breachCount: result.breaches.length,
+      breaches: result.breaches,
+      pasteCount: result.pasteCount,
+      pastes: result.pastes
+    });
   } catch (err) {
     const rateLimited = err.message === 'rate-limited';
     res.status(rateLimited ? 429 : 502).json({
@@ -229,6 +251,59 @@ app.post('/api/password-strength', async (req, res) => {
     pwnedCount: pwned ? pwned.count : null,
     notes: allNotes
   });
+});
+
+// ---------- suspicious link checker ----------
+// Free, keyless lookup against URLhaus (abuse.ch), a community-run database
+// of known phishing/malware URLs. Good for "is this text/email link safe
+// to click" — not a full antivirus, just a known-bad-URL check.
+app.post('/api/link-check', async (req, res) => {
+  let input = String((req.body && req.body.url) || '').trim();
+  if (!input) return res.status(400).json({ ok: false, error: 'url required' });
+  if (!/^https?:\/\//i.test(input)) input = 'http://' + input;
+
+  let parsed;
+  try {
+    parsed = new URL(input);
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: 'That doesn\'t look like a valid URL' });
+  }
+
+  const key = `link:${parsed.href}`;
+  try {
+    const result = await cached(key, 30 * 60 * 1000, async () => {
+      const r = await fetch('https://urlhaus-api.abuse.ch/v1/url/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'user-agent': 'family-exposure-dashboard'
+        },
+        body: new URLSearchParams({ url: parsed.href }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!r.ok) throw new Error(`URLhaus responded ${r.status}`);
+      return r.json();
+    });
+
+    if (result.query_status === 'ok') {
+      res.json({
+        ok: true,
+        checkedUrl: parsed.href,
+        flagged: true,
+        threat: result.threat || 'malicious',
+        status: result.url_status || null,
+        dateAdded: result.date_added || null,
+        tags: result.tags || [],
+        reference: result.urlhaus_reference || null
+      });
+    } else {
+      // "no_results" (or any other non-"ok" status) means URLhaus has no
+      // record of it — not a guarantee of safety, just nothing known-bad.
+      res.json({ ok: true, checkedUrl: parsed.href, flagged: false });
+    }
+  } catch (err) {
+    res.status(502).json({ ok: false, error: `Link check failed: ${err.message}` });
+  }
 });
 
 app.listen(PORT, () => {

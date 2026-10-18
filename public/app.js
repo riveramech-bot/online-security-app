@@ -3,11 +3,39 @@
 
   var STORAGE_KEY = 'fed_family_v1';
   var INTERVAL_KEY = 'fed_interval_days';
+  var BROKER_KEY = 'fed_broker_status_v1';
+  var FREEZE_KEY = 'fed_freeze_status_v1';
+
+  var DATA_BROKER_SITES = [
+    { id: 'spokeo', name: 'Spokeo', url: 'https://www.spokeo.com/optout', note: 'Search your name first, then submit opt-out per listing found.' },
+    { id: 'whitepages', name: 'Whitepages', url: 'https://www.whitepages.com/suppression-requests', note: 'Can take 24-72 hours to process.' },
+    { id: 'beenverified', name: 'BeenVerified', url: 'https://www.beenverified.com/app/optout/search', note: 'Confirm the opt-out via the email they send.' },
+    { id: 'intelius', name: 'Intelius', url: 'https://www.intelius.com/opt-out', note: '' },
+    { id: 'mylife', name: 'MyLife', url: 'https://www.mylife.com/privacy-policy', note: 'Opt-out form is linked from their privacy policy — known to be slower than most.' },
+    { id: 'peoplefinders', name: 'PeopleFinders', url: 'https://www.peoplefinders.com/opt-out', note: '' },
+    { id: 'instantcheckmate', name: 'Instant Checkmate', url: 'https://www.instantcheckmate.com/opt-out/', note: '' },
+    { id: 'truthfinder', name: 'TruthFinder', url: 'https://www.truthfinder.com/opt-out/', note: '' },
+    { id: 'radaris', name: 'Radaris', url: 'https://radaris.com/control/privacy', note: '' },
+    { id: 'fastpeoplesearch', name: 'FastPeopleSearch', url: 'https://www.fastpeoplesearch.com/removal', note: '' },
+    { id: 'nuwber', name: 'Nuwber', url: 'https://nuwber.com/removal/link', note: '' },
+    { id: 'ussearch', name: 'USSearch', url: 'https://www.ussearch.com/opt-out/', note: '' },
+    { id: 'clustrmaps', name: 'ClustrMaps', url: 'https://clustrmaps.com/bl/opt-out', note: '' },
+    { id: 'checkpeople', name: 'CheckPeople', url: 'https://www.checkpeople.com/opt-out', note: '' }
+  ];
+
+  var CREDIT_BUREAUS = [
+    { id: 'equifax', name: 'Equifax', url: 'https://my.equifax.com/consumer-registration/' },
+    { id: 'experian', name: 'Experian', url: 'https://www.experian.com/freeze/center.html' },
+    { id: 'transunion', name: 'TransUnion', url: 'https://www.transunion.com/credit-freeze' },
+    { id: 'innovis', name: 'Innovis', url: 'https://www.innovis.com/securityFreeze/index' }
+  ];
 
   var state = {
     family: [],
     intervalDays: 7,
-    breachEnabled: false
+    breachEnabled: false,
+    brokerStatus: {},
+    freezeStatus: {}
   };
 
   // ---------- persistence (client-side only, by design: no family PII sits on the server) ----------
@@ -20,12 +48,26 @@
       var iv = localStorage.getItem(INTERVAL_KEY);
       state.intervalDays = iv ? parseInt(iv, 10) : 7;
     } catch (e) { state.intervalDays = 7; }
+    try {
+      var bs = localStorage.getItem(BROKER_KEY);
+      state.brokerStatus = bs ? JSON.parse(bs) : {};
+    } catch (e) { state.brokerStatus = {}; }
+    try {
+      var fs = localStorage.getItem(FREEZE_KEY);
+      state.freezeStatus = fs ? JSON.parse(fs) : {};
+    } catch (e) { state.freezeStatus = {}; }
   }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.family)); } catch (e) {}
   }
   function saveInterval() {
     try { localStorage.setItem(INTERVAL_KEY, String(state.intervalDays)); } catch (e) {}
+  }
+  function saveBrokerStatus() {
+    try { localStorage.setItem(BROKER_KEY, JSON.stringify(state.brokerStatus)); } catch (e) {}
+  }
+  function saveFreezeStatus() {
+    try { localStorage.setItem(FREEZE_KEY, JSON.stringify(state.freezeStatus)); } catch (e) {}
   }
 
   function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
@@ -73,6 +115,8 @@
           member.status = d.breachCount > 0 ? 'exposed' : 'clean';
           member.breachCount = d.breachCount;
           member.breaches = d.breaches;
+          member.pasteCount = d.pasteCount || 0;
+          member.pastes = d.pastes || [];
         } else {
           member.status = 'error';
           member.error = d.error;
@@ -190,6 +234,100 @@
   function renderAll() {
     renderScore();
     renderFamily();
+    renderBrokerList();
+    renderFreezeTable();
+  }
+
+  // ---------- data broker opt-out tracker ----------
+  function renderBrokerList() {
+    var list = document.getElementById('brokerList');
+    if (!list) return;
+    list.innerHTML = '';
+    DATA_BROKER_SITES.forEach(function (site) {
+      var done = !!state.brokerStatus[site.id];
+      var row = document.createElement('div');
+      row.className = 'broker-row' + (done ? ' done' : '');
+      row.innerHTML =
+        '<input type="checkbox" data-broker="' + site.id + '" ' + (done ? 'checked' : '') + ' />' +
+        '<div class="broker-name"><div class="bn-title">' + escapeHtml(site.name) + '</div>' +
+        (site.note ? '<div class="bn-note">' + escapeHtml(site.note) + '</div>' : '') + '</div>' +
+        '<a class="btn btn-ghost" href="' + site.url + '" target="_blank" rel="noopener">Opt out</a>';
+      list.appendChild(row);
+    });
+    list.querySelectorAll('input[type=checkbox][data-broker]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        state.brokerStatus[cb.getAttribute('data-broker')] = cb.checked;
+        saveBrokerStatus();
+        renderBrokerList();
+      });
+    });
+  }
+
+  // ---------- credit freeze checklist ----------
+  function renderFreezeTable() {
+    var wrap = document.getElementById('freezeTable');
+    var empty = document.getElementById('freezeEmpty');
+    if (!wrap) return;
+    if (state.family.length === 0) {
+      wrap.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    var html = '<table><thead><tr><th>Family member</th>';
+    CREDIT_BUREAUS.forEach(function (b) {
+      html += '<th>' + escapeHtml(b.name) + '<a href="' + b.url + '" target="_blank" rel="noopener">freeze &rarr;</a></th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    state.family.forEach(function (m) {
+      state.freezeStatus[m.id] = state.freezeStatus[m.id] || {};
+      html += '<tr><td>' + escapeHtml(m.name) + '</td>';
+      CREDIT_BUREAUS.forEach(function (b) {
+        var checked = !!state.freezeStatus[m.id][b.id];
+        html += '<td><input type="checkbox" data-member="' + m.id + '" data-bureau="' + b.id + '" ' + (checked ? 'checked' : '') + ' /></td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+
+    wrap.querySelectorAll('input[type=checkbox][data-member]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var mId = cb.getAttribute('data-member');
+        var bId = cb.getAttribute('data-bureau');
+        state.freezeStatus[mId] = state.freezeStatus[mId] || {};
+        state.freezeStatus[mId][bId] = cb.checked;
+        saveFreezeStatus();
+      });
+    });
+  }
+
+  // ---------- suspicious link checker ----------
+  function runLinkCheck() {
+    var url = document.getElementById('linkInput').value.trim();
+    var resultEl = document.getElementById('linkResult');
+    if (!url) { resultEl.innerHTML = ''; return; }
+    resultEl.innerHTML = '<p style="color:#a9b4cc;">Checking…</p>';
+    fetch('/api/link-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { resultEl.innerHTML = '<p style="color:#f08a8a;">' + escapeHtml(d.error || 'Check failed.') + '</p>'; return; }
+      if (d.flagged) {
+        var html = '<div style="font-weight:700;color:#f08a8a;">⚠ Known malicious link — do not click</div>';
+        html += '<div style="font-size:12px;color:#a9b4cc;margin-top:6px;">Threat type: ' + escapeHtml(d.threat || 'unknown') + '</div>';
+        if (d.dateAdded) html += '<div style="font-size:12px;color:#a9b4cc;">Flagged since: ' + escapeHtml(d.dateAdded) + '</div>';
+        resultEl.innerHTML = html;
+      } else {
+        resultEl.innerHTML = '<div style="font-weight:700;color:#4fd68a;">✓ Not found in known-malicious databases</div>' +
+          '<div style="font-size:12px;color:#a9b4cc;margin-top:6px;">Not a guarantee of safety — stay cautious with links from people or senders you don\'t recognize.</div>';
+      }
+    }).catch(function () {
+      resultEl.innerHTML = '<p style="color:#f08a8a;">Check failed — try again.</p>';
+    });
   }
 
   // ---------- guided fix-it checklist ----------
@@ -265,6 +403,9 @@
       html += '<p style="color:#f08a8a;font-size:13px;">Last check failed: ' + escapeHtml(member.error || 'unknown error') + '</p>';
     } else if (member.status === 'clean') {
       html += '<p style="color:#4fd68a;font-size:13px;">No known breaches for ' + escapeHtml(member.email) + '.</p>';
+      if (member.pasteCount) {
+        html += '<p style="color:#e8a94c;font-size:13px;">But found in ' + member.pasteCount + ' dark-web paste' + (member.pasteCount === 1 ? '' : 's') + ' — data dumped outside formal breaches. Worth treating like a breach: change reused passwords tied to this email.</p>';
+      }
     } else if (member.status === 'exposed' && member.breaches) {
       member.breaches.forEach(function (b) {
         var checklist = getChecklistState(member, b);
@@ -281,6 +422,10 @@
         });
         html += '</div></div>';
       });
+      if (member.pasteCount) {
+        html += '<div class="paste-item"><div class="p-title">⚠ Also found in ' + member.pasteCount + ' dark-web paste' + (member.pasteCount === 1 ? '' : 's') + '</div>' +
+          '<div class="p-sub">Data dumped outside formal breach disclosures. Treat it the same as a breach above — change any reused passwords.</div></div>';
+      }
     } else {
       html += '<p style="color:#a9b4cc;font-size:13px;">Not checked yet.</p>';
     }
@@ -383,6 +528,11 @@
     document.getElementById('pwToggle').addEventListener('click', function () {
       var input = document.getElementById('pwInput');
       input.type = input.type === 'password' ? 'text' : 'password';
+    });
+
+    document.getElementById('linkCheckBtn').addEventListener('click', runLinkCheck);
+    document.getElementById('linkInput').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') runLinkCheck();
     });
 
     loadStatus();
