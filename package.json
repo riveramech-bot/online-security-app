@@ -1,0 +1,13 @@
+{
+  "name": "online-security-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Family exposure/breach cleanup dashboard - checks family members' emails against known data breaches, scores password strength, and walks through fixes.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

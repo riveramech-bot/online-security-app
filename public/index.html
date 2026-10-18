@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Family Exposure Dashboard</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🛡️ Family Exposure Dashboard</div>
+    <div id="statusBadge" class="status-badge">checking status…</div>
+  </header>
+
+  <main>
+    <section class="score-panel" id="scorePanel">
+      <div class="score-ring" id="scoreRing">
+        <span id="scoreNumber">--</span>
+      </div>
+      <div class="score-text">
+        <h2 id="scoreHeadline">Add your family to get started</h2>
+        <p id="scoreSub">Everyone's exposure, in one place.</p>
+      </div>
+      <div class="score-settings">
+        <label for="intervalSelect">Auto-recheck every</label>
+        <select id="intervalSelect">
+          <option value="1">day</option>
+          <option value="7" selected>week</option>
+          <option value="14">2 weeks</option>
+          <option value="30">month</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="family-section">
+      <div class="section-head">
+        <h3>Family</h3>
+        <button id="addMemberBtn" class="btn btn-primary">+ Add family member</button>
+      </div>
+      <div id="familyGrid" class="family-grid"></div>
+      <p id="emptyState" class="empty-state">No one added yet. Add yourself first — tap "Add family member" above.</p>
+    </section>
+
+    <section class="tool-section">
+      <h3>Password strength checker</h3>
+      <p class="tool-sub">Checked locally and against known breached-password lists. Your password is never stored, and only a partial hash ever leaves this check.</p>
+      <div class="pw-tool">
+        <input type="password" id="pwInput" placeholder="Type a password to check it" autocomplete="off" />
+        <button id="pwToggle" class="btn btn-ghost" type="button">👁</button>
+        <button id="pwCheckBtn" class="btn btn-primary">Check</button>
+      </div>
+      <div id="pwResult" class="pw-result"></div>
+    </section>
+  </main>
+
+  <!-- Add member modal -->
+  <div id="addModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Add family member</h3>
+      <label>Name</label>
+      <input type="text" id="newName" placeholder="e.g. Mike" />
+      <label>Email</label>
+      <input type="email" id="newEmail" placeholder="e.g. mike@example.com" />
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelAdd">Cancel</button>
+        <button class="btn btn-primary" id="confirmAdd">Add & check</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Member detail modal -->
+  <div id="detailModal" class="modal hidden">
+    <div class="modal-card modal-card-wide">
+      <div class="modal-head">
+        <h3 id="detailName">Name</h3>
+        <button class="btn btn-ghost" id="closeDetail">✕</button>
+      </div>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
