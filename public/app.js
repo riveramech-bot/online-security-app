@@ -84,6 +84,7 @@
   function loadStatus() {
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
       state.breachEnabled = !!d.breachCheckEnabled;
+      state.linkCheckEnabled = !!d.linkCheckEnabled;
       var badge = document.getElementById('statusBadge');
       if (state.breachEnabled) {
         badge.textContent = d.hibpEnabled ? 'Breach checking: live (free + HIBP)' : 'Breach checking: live (free)';
@@ -91,6 +92,10 @@
       } else {
         badge.textContent = 'Breach checking unavailable';
         badge.className = 'status-badge warn';
+      }
+      var linkNote = document.getElementById('linkCheckNote');
+      if (linkNote) {
+        linkNote.style.display = state.linkCheckEnabled ? 'none' : 'block';
       }
     }).catch(function () {
       var badge = document.getElementById('statusBadge');
@@ -315,7 +320,11 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: url })
     }).then(function (r) { return r.json(); }).then(function (d) {
-      if (!d.ok) { resultEl.innerHTML = '<p style="color:#f08a8a;">' + escapeHtml(d.error || 'Check failed.') + '</p>'; return; }
+      if (!d.ok) {
+        var color = d.noKey ? '#e8a94c' : '#f08a8a';
+        resultEl.innerHTML = '<p style="color:' + color + ';">' + escapeHtml(d.error || 'Check failed.') + '</p>';
+        return;
+      }
       if (d.flagged) {
         var html = '<div style="font-weight:700;color:#f08a8a;">⚠ Known malicious link — do not click</div>';
         html += '<div style="font-size:12px;color:#a9b4cc;margin-top:6px;">Threat type: ' + escapeHtml(d.threat || 'unknown') + '</div>';

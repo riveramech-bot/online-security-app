@@ -7,6 +7,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const HIBP_API_KEY = process.env.HIBP_API_KEY || '';
+const ABUSECH_AUTH_KEY = process.env.ABUSECH_AUTH_KEY || '';
 const PORT = process.env.PORT || 3000;
 
 // ---------- simple in-memory cache (per-process, resets on restart) ----------
@@ -27,7 +28,8 @@ app.get('/api/status', (req, res) => {
     ok: true,
     breachCheckEnabled: true, // XposedOrNot is free/keyless, so this is always on
     hibpEnabled: Boolean(HIBP_API_KEY), // optional extra coverage layer
-    passwordCheckEnabled: true // this one is always free/keyless too
+    passwordCheckEnabled: true, // this one is always free/keyless too
+    linkCheckEnabled: Boolean(ABUSECH_AUTH_KEY)
   });
 });
 
@@ -254,10 +256,19 @@ app.post('/api/password-strength', async (req, res) => {
 });
 
 // ---------- suspicious link checker ----------
-// Free, keyless lookup against URLhaus (abuse.ch), a community-run database
-// of known phishing/malware URLs. Good for "is this text/email link safe
-// to click" — not a full antivirus, just a known-bad-URL check.
+// Lookup against URLhaus (abuse.ch), a community-run database of known
+// phishing/malware URLs. As of 2025 abuse.ch requires a free Auth-Key for
+// API access (sign in with Google/GitHub/X/LinkedIn at auth.abuse.ch, no
+// cost) — without one, this route says so clearly instead of pretending.
 app.post('/api/link-check', async (req, res) => {
+  if (!ABUSECH_AUTH_KEY) {
+    return res.json({
+      ok: false,
+      noKey: true,
+      error: 'No ABUSECH_AUTH_KEY configured yet. Free to get at auth.abuse.ch — add it in Render env vars to enable.'
+    });
+  }
+
   let input = String((req.body && req.body.url) || '').trim();
   if (!input) return res.status(400).json({ ok: false, error: 'url required' });
   if (!/^https?:\/\//i.test(input)) input = 'http://' + input;
@@ -276,6 +287,7 @@ app.post('/api/link-check', async (req, res) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
+          'Auth-Key': ABUSECH_AUTH_KEY,
           'user-agent': 'family-exposure-dashboard'
         },
         body: new URLSearchParams({ url: parsed.href }),
