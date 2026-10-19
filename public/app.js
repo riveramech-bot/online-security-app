@@ -3,25 +3,11 @@
 
   var STORAGE_KEY = 'fed_family_v1';
   var INTERVAL_KEY = 'fed_interval_days';
-  var BROKER_KEY = 'fed_broker_status_v1';
+  var REMOVAL_KEY = 'fed_removal_v1';
   var FREEZE_KEY = 'fed_freeze_status_v1';
 
-  var DATA_BROKER_SITES = [
-    { id: 'spokeo', name: 'Spokeo', url: 'https://www.spokeo.com/optout', note: 'Search your name first, then submit opt-out per listing found.' },
-    { id: 'whitepages', name: 'Whitepages', url: 'https://www.whitepages.com/suppression-requests', note: 'Can take 24-72 hours to process.' },
-    { id: 'beenverified', name: 'BeenVerified', url: 'https://www.beenverified.com/app/optout/search', note: 'Confirm the opt-out via the email they send.' },
-    { id: 'intelius', name: 'Intelius', url: 'https://www.intelius.com/opt-out', note: '' },
-    { id: 'mylife', name: 'MyLife', url: 'https://www.mylife.com/privacy-policy', note: 'Opt-out form is linked from their privacy policy — known to be slower than most.' },
-    { id: 'peoplefinders', name: 'PeopleFinders', url: 'https://www.peoplefinders.com/opt-out', note: '' },
-    { id: 'instantcheckmate', name: 'Instant Checkmate', url: 'https://www.instantcheckmate.com/opt-out/', note: '' },
-    { id: 'truthfinder', name: 'TruthFinder', url: 'https://www.truthfinder.com/opt-out/', note: '' },
-    { id: 'radaris', name: 'Radaris', url: 'https://radaris.com/control/privacy', note: '' },
-    { id: 'fastpeoplesearch', name: 'FastPeopleSearch', url: 'https://www.fastpeoplesearch.com/removal', note: '' },
-    { id: 'nuwber', name: 'Nuwber', url: 'https://nuwber.com/removal/link', note: '' },
-    { id: 'ussearch', name: 'USSearch', url: 'https://www.ussearch.com/opt-out/', note: '' },
-    { id: 'clustrmaps', name: 'ClustrMaps', url: 'https://clustrmaps.com/bl/opt-out', note: '' },
-    { id: 'checkpeople', name: 'CheckPeople', url: 'https://www.checkpeople.com/opt-out', note: '' }
-  ];
+  var BROKERS = window.FED_BROKERS || [];
+  var NEED_LABELS = window.FED_NEED_LABELS || {};
 
   var CREDIT_BUREAUS = [
     { id: 'equifax', name: 'Equifax', url: 'https://my.equifax.com/consumer-registration/' },
@@ -34,7 +20,9 @@
     family: [],
     intervalDays: 7,
     breachEnabled: false,
-    brokerStatus: {},
+    removal: {},
+    removalMemberId: null,
+    openBroker: null,
     freezeStatus: {}
   };
 
@@ -49,9 +37,9 @@
       state.intervalDays = iv ? parseInt(iv, 10) : 7;
     } catch (e) { state.intervalDays = 7; }
     try {
-      var bs = localStorage.getItem(BROKER_KEY);
-      state.brokerStatus = bs ? JSON.parse(bs) : {};
-    } catch (e) { state.brokerStatus = {}; }
+      var rm = localStorage.getItem(REMOVAL_KEY);
+      state.removal = rm ? JSON.parse(rm) : {};
+    } catch (e) { state.removal = {}; }
     try {
       var fs = localStorage.getItem(FREEZE_KEY);
       state.freezeStatus = fs ? JSON.parse(fs) : {};
@@ -63,8 +51,8 @@
   function saveInterval() {
     try { localStorage.setItem(INTERVAL_KEY, String(state.intervalDays)); } catch (e) {}
   }
-  function saveBrokerStatus() {
-    try { localStorage.setItem(BROKER_KEY, JSON.stringify(state.brokerStatus)); } catch (e) {}
+  function saveRemoval() {
+    try { localStorage.setItem(REMOVAL_KEY, JSON.stringify(state.removal)); } catch (e) {}
   }
   function saveFreezeStatus() {
     try { localStorage.setItem(FREEZE_KEY, JSON.stringify(state.freezeStatus)); } catch (e) {}
@@ -209,6 +197,12 @@
     return days + 'd ago';
   }
 
+  function removalLine(m) {
+    var s = removalSummary(m.id);
+    return '<div class="mc-removal">Removals: ' + s.done + '/' + s.total + ' clear' +
+      (s.need ? ' &middot; <span class="mc-need">' + s.need + ' need you</span>' : '') + '</div>';
+  }
+
   function renderFamily() {
     var grid = document.getElementById('familyGrid');
     var empty = document.getElementById('emptyState');
@@ -224,7 +218,7 @@
       card.innerHTML =
         '<div class="mc-top"><span class="mc-name">' + escapeHtml(m.name) + '</span>' + statusPillHtml(m) + '</div>' +
         '<div class="mc-email">' + escapeHtml(m.email) + '</div>' +
-        '<div class="mc-meta">Checked ' + timeAgo(m.lastChecked) + '</div>';
+        '<div class="mc-meta">Checked ' + timeAgo(m.lastChecked) + '</div>' + removalLine(m);
       card.addEventListener('click', function () { openDetail(m.id); });
       grid.appendChild(card);
     });
@@ -239,32 +233,323 @@
   function renderAll() {
     renderScore();
     renderFamily();
-    renderBrokerList();
+    renderRemoval();
     renderFreezeTable();
   }
 
-  // ---------- data broker opt-out tracker ----------
-  function renderBrokerList() {
-    var list = document.getElementById('brokerList');
-    if (!list) return;
-    list.innerHTML = '';
-    DATA_BROKER_SITES.forEach(function (site) {
-      var done = !!state.brokerStatus[site.id];
-      var row = document.createElement('div');
-      row.className = 'broker-row' + (done ? ' done' : '');
-      row.innerHTML =
-        '<input type="checkbox" data-broker="' + site.id + '" ' + (done ? 'checked' : '') + ' />' +
-        '<div class="broker-name"><div class="bn-title">' + escapeHtml(site.name) + '</div>' +
-        (site.note ? '<div class="bn-note">' + escapeHtml(site.note) + '</div>' : '') + '</div>' +
-        '<a class="btn btn-ghost" href="' + site.url + '" target="_blank" rel="noopener">Opt out</a>';
-      list.appendChild(row);
+  // ---------- data broker removal (per person) ----------
+  // Everything here stays in this browser's localStorage. The app never sends
+  // names, phone numbers or listing addresses to the server.
+  var STATUS_LABELS = {
+    todo: 'Not checked',
+    notlisted: 'Not listed',
+    listed: 'Listed',
+    submitted: 'Submitted: confirm email',
+    confirmed: 'Confirmed: waiting',
+    removed: 'Removed',
+    reappeared: 'Came back'
+  };
+  var DAY = 24 * 60 * 60 * 1000;
+
+  function getProfile(m) {
+    m.profile = m.profile || {};
+    return m.profile;
+  }
+
+  // What the broker search links and messages are built from.
+  function searchProfile(m) {
+    var p = getProfile(m);
+    var parts = String(p.legalName || m.name || '').trim().split(/\s+/).filter(Boolean);
+    return {
+      first: parts[0] || '',
+      last: parts.length > 1 ? parts[parts.length - 1] : '',
+      city: String(p.city || '').trim(),
+      st: String(p.state || '').trim().toUpperCase(),
+      phones: String(p.phones || '').split(/[,;\n]+/)
+        .map(function (s) { return s.replace(/\D/g, ''); })
+        .filter(function (s) { return s.length === 10; })
+    };
+  }
+
+  function getRec(memberId, brokerId) {
+    var byMember = state.removal[memberId] || {};
+    return byMember[brokerId] || { status: 'todo' };
+  }
+
+  function setRec(memberId, brokerId, patch) {
+    state.removal[memberId] = state.removal[memberId] || {};
+    var cur = state.removal[memberId][brokerId] || { status: 'todo' };
+    Object.keys(patch).forEach(function (k) { cur[k] = patch[k]; });
+    cur.updatedAt = Date.now();
+    state.removal[memberId][brokerId] = cur;
+    saveRemoval();
+  }
+
+  // Returns a short "what do I do next" string, or null if nothing is needed now.
+  function attentionFor(rec) {
+    var now = Date.now();
+    if (rec.status === 'listed') return 'Start the opt-out';
+    if (rec.status === 'reappeared') return 'It came back: submit again';
+    if (rec.status === 'submitted') {
+      return (now - (rec.submittedAt || rec.updatedAt || now)) > DAY
+        ? 'No confirmation after a day: try the email fallback'
+        : 'Click the confirmation link in the alias inbox';
+    }
+    if (rec.status === 'confirmed') {
+      return (now - (rec.confirmedAt || rec.updatedAt || now)) > 3 * DAY ? 'Check whether the listing is gone' : null;
+    }
+    if (rec.status === 'removed' || rec.status === 'notlisted') {
+      return (now - (rec.checkedAt || rec.updatedAt || now)) > state.intervalDays * DAY ? 'Recheck due' : null;
+    }
+    return null;
+  }
+
+  function removalSummary(memberId) {
+    var done = 0, need = 0;
+    BROKERS.forEach(function (b) {
+      var r = getRec(memberId, b.id);
+      if (r.status === 'removed' || r.status === 'notlisted') done++;
+      if (attentionFor(r)) need++;
     });
-    list.querySelectorAll('input[type=checkbox][data-broker]').forEach(function (cb) {
-      cb.addEventListener('change', function () {
-        state.brokerStatus[cb.getAttribute('data-broker')] = cb.checked;
-        saveBrokerStatus();
-        renderBrokerList();
-      });
+    return { done: done, need: need, total: BROKERS.length };
+  }
+
+  function removalMessage(m, b, rec) {
+    var p = getProfile(m);
+    var sp = searchProfile(m);
+    var where = [sp.city, sp.st].filter(Boolean).join(', ');
+    var lines = [
+      'Please remove my listing from ' + b.name + (b.also ? ' (and ' + b.also + ')' : '') + '.',
+      '',
+      'Name: ' + (p.legalName || m.name)
+    ];
+    if (where) lines.push('Location shown on your site: ' + where);
+    if (rec.profileUrl) lines.push('Listing: ' + rec.profileUrl);
+    lines.push('', 'Please suppress all name, address, phone and relative information tied to this record, and confirm by reply to this email address.');
+    return lines.join('\n');
+  }
+
+  function copyText(text) {
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      showToast(ok ? 'Copied' : 'Copy failed', !ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { showToast('Copied'); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function currentRemovalMember() {
+    var m = state.family.find(function (x) { return x.id === state.removalMemberId; });
+    if (!m && state.family.length) {
+      m = state.family[0];
+      state.removalMemberId = m.id;
+    }
+    return m || null;
+  }
+
+  function renderRemoval(keepProfile) {
+    var chips = document.getElementById('removalMembers');
+    var profileEl = document.getElementById('removalProfile');
+    var needsEl = document.getElementById('removalNeeds');
+    var list = document.getElementById('brokerList');
+    var empty = document.getElementById('removalEmpty');
+    if (!list || !chips) return;
+
+    var member = currentRemovalMember();
+    if (!member) {
+      chips.innerHTML = '';
+      profileEl.innerHTML = '';
+      needsEl.innerHTML = '';
+      list.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    // member chips
+    chips.innerHTML = state.family.map(function (m) {
+      var s = removalSummary(m.id);
+      return '<button class="chip' + (m.id === member.id ? ' active' : '') + '" data-member="' + escapeHtml(m.id) + '">' +
+        escapeHtml(m.name) + ' <span class="chip-count">' + s.done + '/' + s.total + '</span>' +
+        (s.need ? '<span class="chip-need">' + s.need + '</span>' : '') + '</button>';
+    }).join('');
+
+    // profile used for searches and messages
+    var p = getProfile(member);
+    if (!keepProfile) profileEl.innerHTML =
+      '<div class="rp-grid">' +
+      '<label>Full name as listed<input data-pfield="legalName" value="' + escapeHtml(p.legalName || member.name) + '" placeholder="e.g. Michael E Rivera" /></label>' +
+      '<label>City<input data-pfield="city" value="' + escapeHtml(p.city || '') + '" placeholder="e.g. Hatfield" /></label>' +
+      '<label>State (2 letters)<input data-pfield="state" maxlength="2" value="' + escapeHtml(p.state || '') + '" placeholder="PA" /></label>' +
+      '<label>Phone numbers (comma separated)<input data-pfield="phones" value="' + escapeHtml(p.phones || '') + '" placeholder="e.g. 267-555-0100" /></label>' +
+      '<label class="rp-wide">Alias email for opt-outs<input data-pfield="aliasEmail" type="email" value="' + escapeHtml(p.aliasEmail || '') + '" placeholder="a throwaway address used only for removals" /></label>' +
+      '</div>' +
+      '<p class="rp-note">Use a separate throwaway email for each person: BeenVerified allows one opt-out per address, and confirmation links land here. Only enter details a site already shows. Nothing here leaves this browser.</p>';
+
+    // what needs the person right now
+    var needs = [];
+    BROKERS.forEach(function (b) {
+      var a = attentionFor(getRec(member.id, b.id));
+      if (a) needs.push({ broker: b, text: a });
+    });
+    if (needs.length) {
+      needsEl.innerHTML = '<div class="needs-title">Needs you (' + needs.length + ')</div>' +
+        needs.slice(0, 8).map(function (n) {
+          return '<button class="need-row" data-open="' + n.broker.id + '"><strong>' + escapeHtml(n.broker.name) + '</strong> ' + escapeHtml(n.text) + '</button>';
+        }).join('') +
+        (needs.length > 8 ? '<div class="need-more">and ' + (needs.length - 8) + ' more below</div>' : '');
+    } else {
+      needsEl.innerHTML = '';
+    }
+
+    // broker rows
+    var sp = searchProfile(member);
+    list.innerHTML = BROKERS.map(function (b) {
+      var rec = getRec(member.id, b.id);
+      var attn = attentionFor(rec);
+      var searchUrl = b.search ? b.search(sp) : null;
+      var open = state.openBroker === b.id;
+
+      var tags = (b.needs || []).map(function (n) {
+        return '<span class="need-tag">' + escapeHtml(NEED_LABELS[n] || n) + '</span>';
+      }).join('');
+
+      var btn = function (status, label, extra) {
+        return '<button class="btn btn-ghost btn-sm" data-act="set" data-broker="' + b.id + '" data-status="' + status + '"' + (extra || '') + '>' + label + '</button>';
+      };
+      var actions = '';
+      if (rec.status === 'todo') actions = btn('notlisted', 'Not listed') + btn('listed', 'Found it');
+      else if (rec.status === 'listed') actions = btn('submitted', 'I submitted it') + btn('notlisted', 'Not listed after all');
+      else if (rec.status === 'submitted') actions = btn('confirmed', 'I clicked the email link');
+      else if (rec.status === 'confirmed') actions = btn('removed', 'It is gone') + btn('listed', 'Still listed');
+      else if (rec.status === 'removed') actions = btn('removed', 'Still gone') + btn('reappeared', 'It is back');
+      else if (rec.status === 'notlisted') actions = btn('notlisted', 'Still not listed') + btn('listed', 'Found it');
+      else if (rec.status === 'reappeared') actions = btn('submitted', 'Submitted again');
+
+      var links = '';
+      if (searchUrl) links += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(searchUrl) + '" target="_blank" rel="noopener">Search</a>';
+      links += '<a class="btn btn-primary btn-sm" href="' + escapeHtml(b.optOutUrl) + '" target="_blank" rel="noopener">Opt-out page</a>';
+
+      var detail = '';
+      if (open) {
+        var have = [];
+        var fullName = p.legalName || member.name;
+        if (fullName) have.push(['Name', fullName]);
+        if (sp.city || sp.st) have.push(['Location', [sp.city, sp.st].filter(Boolean).join(', ')]);
+        if (p.aliasEmail) have.push(['Alias email', p.aliasEmail]);
+        sp.phones.forEach(function (ph) { have.push(['Phone', ph]); });
+
+        detail = '<div class="br-detail">' +
+          '<ol class="br-steps">' + b.steps.map(function (s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ol>' +
+          (b.tip ? '<p class="br-tip">' + escapeHtml(b.tip) + '</p>' : '') +
+          ((b.needs || []).some(function (n) { return n === 'captcha' || n === 'certify' || n === 'emailConfirm' || n === 'call'; })
+            ? '<p class="br-human">These steps need a person: the app can\'t tick captchas, make the "this is me" certification, or open your alias inbox.</p>' : '') +
+          (have.length ? '<div class="br-have"><span>Copy:</span>' + have.map(function (h) {
+            return '<button class="copy-chip" data-copy="' + escapeHtml(h[1]) + '">' + escapeHtml(h[0]) + '</button>';
+          }).join('') + '</div>' : '') +
+          '<label class="br-field">Your listing address (paste it here to keep it)<input data-field="profileUrl" data-broker="' + b.id + '" value="' + escapeHtml(rec.profileUrl || '') + '" placeholder="https://..." /></label>' +
+          '<label class="br-field">Notes<input data-field="note" data-broker="' + b.id + '" value="' + escapeHtml(rec.note || '') + '" placeholder="e.g. second form done, waiting on reply" /></label>' +
+          '<div class="br-fallback">' +
+          '<button class="btn btn-ghost btn-sm" data-act="copymsg" data-broker="' + b.id + '">Copy removal message</button>' +
+          (b.fallbackEmail ? ' <button class="btn btn-ghost btn-sm" data-copy="' + escapeHtml(b.fallbackEmail) + '">Copy ' + escapeHtml(b.fallbackEmail) + '</button>' : '') +
+          ' <button class="btn btn-ghost btn-sm" data-act="set" data-broker="' + b.id + '" data-status="todo">Reset</button>' +
+          '</div></div>';
+      }
+
+      return '<div class="broker-row st-' + rec.status + '" data-row="' + b.id + '">' +
+        '<div class="br-head">' +
+        '<div class="br-main"><div class="br-top"><span class="bn-title">' + escapeHtml(b.name) + '</span>' +
+        '<span class="rm-pill rm-' + rec.status + '">' + escapeHtml(STATUS_LABELS[rec.status] || rec.status) + '</span></div>' +
+        (b.also ? '<div class="bn-note">Also covers: ' + escapeHtml(b.also) + '</div>' : '') +
+        (tags ? '<div class="br-tags">' + tags + '</div>' : '') +
+        (attn ? '<div class="br-attn">' + escapeHtml(attn) + '</div>' : '') +
+        '</div>' +
+        '<div class="br-actions">' + actions + links +
+        '<button class="btn btn-ghost btn-sm" data-act="toggle" data-broker="' + b.id + '">' + (open ? 'Hide steps' : 'Steps') + '</button></div>' +
+        '</div>' + detail + '</div>';
+    }).join('');
+  }
+
+  function wireRemoval() {
+    var section = document.getElementById('removalSection');
+    if (!section) return;
+
+    section.addEventListener('click', function (e) {
+      var t = e.target.closest ? e.target.closest('button') : null;
+      if (!t) return;
+
+      if (t.hasAttribute('data-member')) {
+        state.removalMemberId = t.getAttribute('data-member');
+        state.openBroker = null;
+        renderRemoval();
+        return;
+      }
+      if (t.hasAttribute('data-open')) {
+        state.openBroker = t.getAttribute('data-open');
+        renderRemoval();
+        var row = section.querySelector('[data-row="' + state.openBroker + '"]');
+        if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (t.hasAttribute('data-copy') && !t.hasAttribute('data-act')) {
+        copyText(t.getAttribute('data-copy'));
+        return;
+      }
+
+      var act = t.getAttribute('data-act');
+      var bid = t.getAttribute('data-broker');
+      var member = currentRemovalMember();
+      if (!act || !member) return;
+      var broker = BROKERS.find(function (b) { return b.id === bid; });
+      if (!broker) return;
+
+      if (act === 'toggle') {
+        state.openBroker = state.openBroker === bid ? null : bid;
+        renderRemoval();
+      } else if (act === 'copymsg') {
+        copyText(removalMessage(member, broker, getRec(member.id, bid)));
+      } else if (act === 'set') {
+        var status = t.getAttribute('data-status');
+        var now = Date.now();
+        var patch = { status: status };
+        if (status === 'submitted') patch.submittedAt = now;
+        if (status === 'confirmed') patch.confirmedAt = now;
+        if (status === 'removed' || status === 'notlisted' || status === 'reappeared') patch.checkedAt = now;
+        setRec(member.id, bid, patch);
+        renderAll();
+      }
+    });
+
+    section.addEventListener('change', function (e) {
+      var el = e.target;
+      var member = currentRemovalMember();
+      if (!member) return;
+      var pf = el.getAttribute && el.getAttribute('data-pfield');
+      if (pf) {
+        var val = el.value.trim();
+        if (pf === 'state') val = val.toUpperCase();
+        getProfile(member)[pf] = val;
+        save();
+        renderRemoval(true);
+        return;
+      }
+      var field = el.getAttribute && el.getAttribute('data-field');
+      if (field) {
+        var patch = {};
+        patch[field] = el.value.trim();
+        setRec(member.id, el.getAttribute('data-broker'), patch);
+      }
     });
   }
 
@@ -544,6 +829,7 @@
       if (e.key === 'Enter') runLinkCheck();
     });
 
+    wireRemoval();
     loadStatus();
     renderAll();
     // give status a moment to resolve before deciding whether to auto-recheck
