@@ -63,10 +63,14 @@
       <div id="linkResult" class="pw-result"></div>
     </section>
 
-    <section class="tool-section">
-      <h3>Data broker opt-out tracker</h3>
-      <p class="tool-sub">People-search sites publish your name, address, and phone number by default. Work through this list once — most take a few minutes each, some take a few days to confirm.</p>
+    <section class="tool-section" id="removalSection">
+      <h3>Data broker removal</h3>
+      <p class="tool-sub">People-search sites publish names, addresses, phone numbers and relatives by default. Pick a family member, check each site, and the app tracks every step. Most sites need a person for the captcha and the email link. Listings often come back, so the app also reminds you to recheck.</p>
+      <div id="removalMembers" class="chips"></div>
+      <div id="removalProfile" class="removal-profile"></div>
+      <div id="removalNeeds" class="needs-box"></div>
       <div id="brokerList" class="broker-list"></div>
+      <p id="removalEmpty" class="empty-state">Add a family member above to start tracking removals.</p>
     </section>
 
     <section class="tool-section">
@@ -105,6 +109,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="brokers.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
