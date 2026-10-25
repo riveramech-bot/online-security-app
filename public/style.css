@@ -53,7 +53,9 @@ main { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
 .score-text { flex: 1; min-width: 160px; }
 .score-text h2 { margin: 0 0 4px; font-size: 16px; }
 .score-text p { margin: 0; font-size: 13px; color: #a9b4cc; }
-.score-settings { font-size: 12px; color: #a9b4cc; display: flex; align-items: center; gap: 6px; }
+.score-settings { font-size: 12px; color: #a9b4cc; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.score-settings .btn { padding: 5px 10px; font-size: 12px; }
+.auto-note { flex-basis: 100%; font-size: 11px; color: #727fa0; margin-top: 2px; }
 .score-settings select { background: #1d2538; color: #e9edf5; border: 1px solid #333f5c; border-radius: 6px; padding: 4px 6px; }
 
 .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -87,6 +89,7 @@ h3 { margin: 0; font-size: 15px; letter-spacing: 0.02em; text-transform: upperca
 .pill-clean { background: #16342a; color: #4fd68a; }
 .pill-exposed { background: #3a1d22; color: #f08a8a; }
 .pill-unknown { background: #2a3350; color: #a9b4cc; }
+.pill-new { background: #4a7cff; color: #fff; }
 .member-card .mc-email { font-size: 12px; color: #a9b4cc; margin-bottom: 10px; word-break: break-all; }
 .member-card .mc-meta { font-size: 11px; color: #727fa0; }
 
