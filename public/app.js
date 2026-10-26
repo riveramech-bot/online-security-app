@@ -70,7 +70,7 @@
 
   // ---------- status ----------
   function loadStatus() {
-    fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
+    return fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
       state.breachEnabled = !!d.breachCheckEnabled;
       state.linkCheckEnabled = !!d.linkCheckEnabled;
       var badge = document.getElementById('statusBadge');
@@ -105,6 +105,15 @@
         if (d.noKey) {
           member.status = 'no-key';
         } else if (d.ok) {
+          // Diff against the last good check so a recheck can say what is NEW.
+          var hadPrior = member.lastChecked && (member.status === 'clean' || member.status === 'exposed');
+          var priorNames = (member.breaches || []).map(function (b) { return b.name; });
+          var fresh = (d.breaches || []).filter(function (b) { return priorNames.indexOf(b.name) === -1; });
+          if (hadPrior && fresh.length) {
+            member.newBreaches = (member.newBreaches || []).concat(fresh.map(function (b) { return b.title || b.name; }));
+            member.newSince = Date.now();
+            member.alerted = false;
+          }
           member.status = d.breachCount > 0 ? 'exposed' : 'clean';
           member.breachCount = d.breachCount;
           member.breaches = d.breaches;
@@ -127,13 +136,108 @@
       });
   }
 
-  function autoRecheckIfDue() {
-    var now = Date.now();
+  // ---------- automatic rechecking ----------
+  // Runs whenever the app is open or brought back to the foreground (and on a
+  // 30-minute timer while it stays open). Family data lives only in this
+  // browser, so a recheck can only happen while the app is loaded here.
+  var AUTO_TICK_MS = 30 * 60 * 1000;   // how often an open tab looks for due checks
+  var MEMBER_GAP_MS = 2500;            // pause between members so the APIs don't rate-limit us
+  var MIN_GAP_BETWEEN_RUNS_MS = 60 * 1000;
+  var NOTIFY_KEY = 'fed_notify_v1';
+  var lastRunStarted = 0;
+
+  function isDue(m, now) {
     var intervalMs = state.intervalDays * 24 * 60 * 60 * 1000;
-    var due = state.family.filter(function (m) {
-      return !m.lastChecked || (now - m.lastChecked) > intervalMs;
+    return !m.lastChecked || (now - m.lastChecked) > intervalMs;
+  }
+
+  function sleep(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
+
+  // force = true rechecks everyone now (the "Check all now" button).
+  function autoRecheckIfDue(force) {
+    if (state.checking || !state.breachEnabled) { updateAutoNote(); return Promise.resolve(); }
+    var now = Date.now();
+    if (!force && now - lastRunStarted < MIN_GAP_BETWEEN_RUNS_MS) return Promise.resolve();
+    var due = state.family.filter(function (m) { return force || isDue(m, now); });
+    if (!due.length) { updateAutoNote(); return Promise.resolve(); }
+
+    state.checking = true;
+    lastRunStarted = now;
+    updateAutoNote();
+
+    // One member at a time, with a short gap, instead of firing every request at once.
+    var chain = Promise.resolve();
+    due.forEach(function (m, i) {
+      chain = chain.then(function () { return i === 0 ? null : sleep(MEMBER_GAP_MS); })
+        .then(function () { return checkMember(m); });
     });
-    due.forEach(function (m) { checkMember(m); });
+    return chain.then(function () {
+      state.checking = false;
+      alertNewBreaches();
+      updateAutoNote();
+    }).catch(function () {
+      state.checking = false;
+      updateAutoNote();
+    });
+  }
+
+  function alertNewBreaches() {
+    var flagged = state.family.filter(function (m) { return m.newBreaches && m.newBreaches.length && !m.alerted; });
+    flagged.forEach(function (m) {
+      var msg = m.name + ': new breach' + (m.newBreaches.length === 1 ? '' : 'es') + ' found (' + m.newBreaches.slice(0, 3).join(', ') + (m.newBreaches.length > 3 ? ', …' : '') + ')';
+      showToast(msg, true);
+      try {
+        if (notifyOn() && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification('Family Exposure Dashboard', { body: msg });
+        }
+      } catch (e) {}
+      m.alerted = true;
+    });
+    if (flagged.length) save();
+  }
+
+  function notifyOn() {
+    try { return localStorage.getItem(NOTIFY_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function setNotify(on) {
+    try { localStorage.setItem(NOTIFY_KEY, on ? '1' : '0'); } catch (e) {}
+    renderNotifyBtn();
+  }
+
+  function renderNotifyBtn() {
+    var btn = document.getElementById('notifyBtn');
+    if (!btn) return;
+    if (!('Notification' in window)) { btn.style.display = 'none'; return; }
+    var on = notifyOn() && Notification.permission === 'granted';
+    btn.textContent = on ? '🔔 Alerts on' : '🔕 Alerts off';
+  }
+
+  function toggleNotify() {
+    if (notifyOn()) { setNotify(false); return; }
+    if (!('Notification' in window)) return;
+    Notification.requestPermission().then(function (perm) {
+      if (perm === 'granted') {
+        setNotify(true);
+        showToast('Alerts on. You will get a notification when a recheck finds a new breach.');
+      } else {
+        setNotify(false);
+        showToast('Notifications are blocked in this browser, so alerts stay off.', true);
+      }
+    });
+  }
+
+  function updateAutoNote() {
+    var el = document.getElementById('autoNote');
+    if (!el) return;
+    if (state.checking) { el.textContent = 'Rechecking now…'; return; }
+    if (!state.family.length) { el.textContent = ''; return; }
+    var last = Math.max.apply(null, state.family.map(function (m) { return m.lastChecked || 0; }));
+    var oldest = Math.min.apply(null, state.family.map(function (m) { return m.lastChecked || 0; }));
+    var intervalMs = state.intervalDays * 24 * 60 * 60 * 1000;
+    var dueIn = oldest ? (oldest + intervalMs) - Date.now() : 0;
+    var nextTxt = dueIn <= 0 ? 'due now' : 'in ' + (dueIn < 3600000 ? Math.max(1, Math.round(dueIn / 60000)) + 'm' : dueIn < 86400000 ? Math.round(dueIn / 3600000) + 'h' : Math.round(dueIn / 86400000) + 'd');
+    el.textContent = (last ? 'Last check ' + timeAgo(last) : 'Not checked yet') + ' · next auto-check ' + nextTxt + ' (runs while this page is open)';
   }
 
   // ---------- score ----------
@@ -216,10 +320,17 @@
       var card = document.createElement('div');
       card.className = 'member-card';
       card.innerHTML =
-        '<div class="mc-top"><span class="mc-name">' + escapeHtml(m.name) + '</span>' + statusPillHtml(m) + '</div>' +
+        '<div class="mc-top"><span class="mc-name">' + escapeHtml(m.name) + '</span><span>' +
+          (m.newBreaches && m.newBreaches.length ? '<span class="mc-pill pill-new" title="' + escapeHtml(m.newBreaches.join(', ')) + '">' + m.newBreaches.length + ' new</span> ' : '') +
+          statusPillHtml(m) + '</span></div>' +
         '<div class="mc-email">' + escapeHtml(m.email) + '</div>' +
         '<div class="mc-meta">Checked ' + timeAgo(m.lastChecked) + '</div>' + removalLine(m);
-      card.addEventListener('click', function () { openDetail(m.id); });
+      card.addEventListener('click', function () {
+        // opening a card counts as seeing what was new
+        if (m.newBreaches && m.newBreaches.length) { m.newBreaches = []; m.alerted = false; save(); }
+        openDetail(m.id);
+        renderFamily();
+      });
       grid.appendChild(card);
     });
   }
@@ -235,6 +346,7 @@
     renderFamily();
     renderRemoval();
     renderFreezeTable();
+    updateAutoNote();
   }
 
   // ---------- data broker removal (per person) ----------
@@ -807,7 +919,9 @@
     document.getElementById('intervalSelect').addEventListener('change', function (e) {
       state.intervalDays = parseInt(e.target.value, 10);
       saveInterval();
+      lastRunStarted = 0;
       autoRecheckIfDue();
+      updateAutoNote();
     });
 
     document.getElementById('addMemberBtn').addEventListener('click', openAddModal);
@@ -830,10 +944,28 @@
     });
 
     wireRemoval();
-    loadStatus();
     renderAll();
-    // give status a moment to resolve before deciding whether to auto-recheck
-    setTimeout(autoRecheckIfDue, 600);
+    renderNotifyBtn();
+
+    var notifyBtn = document.getElementById('notifyBtn');
+    if (notifyBtn) notifyBtn.addEventListener('click', toggleNotify);
+    var recheckBtn = document.getElementById('recheckAllBtn');
+    if (recheckBtn) recheckBtn.addEventListener('click', function () {
+      if (!state.family.length) { showToast('Add a family member first.', true); return; }
+      if (!state.breachEnabled) { showToast('Breach checking is unavailable right now.', true); return; }
+      showToast('Rechecking everyone…');
+      autoRecheckIfDue(true);
+    });
+
+    // Wait for the server status, then run any checks that are due (no more guessing with a timeout).
+    loadStatus().then(function () { return autoRecheckIfDue(); });
+
+    // Keep checking while the page stays open, and again whenever it comes back to the foreground.
+    setInterval(function () { autoRecheckIfDue(); updateAutoNote(); }, AUTO_TICK_MS);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') { autoRecheckIfDue(); updateAutoNote(); }
+    });
+    window.addEventListener('online', function () { autoRecheckIfDue(); });
   }
 
   document.addEventListener('DOMContentLoaded', init);
